@@ -19,16 +19,18 @@ except ImportError:
 
 class FylexConfig:
     MAX_RETRIES = 5
-    ON_CONFLICT_MODES = ["larger", "smaller", "newer", "older","rename", "skip", "prompt", "replace"]
+    ON_CONFLICT_MODES = ["larger", "smaller", "newer", "older", "rename", "skip", "prompt", "replace"]
     DEFAULT_CHUNK_SIZE = 16 * 1024 * 1024
     DEFAULT_HASH_ALGO = "xxhash"
-    DB_FILE = "file_cache.db"
+    FYLEX_HOME = Path.home() / ".fylex"
+    FYLEX_HOME.mkdir(parents=True, exist_ok=True)
     TABLE_NAME = "file_hashes"
+    DB_FILE = "file_cache.db"
+    DB_PATH = FYLEX_HOME / DB_FILE 
     DB_CONN = None
-    DB_PATH = DB_FILE
     DB_LOCK = threading.Lock()
     LOG_MODE = "jsonl"
-
+    
 class FylexState:
     def __init__(self):
         self.parameters = {}
@@ -641,9 +643,10 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
 
     save_as = Path(dest) / src.name
     if dest_file.exists():
-        save_as = str(Path(backup) / str(datetime.datetime.now()))
+        save_as = Path(backup) / datetime.datetime.now().isoformat()
 
     action = resolve_conflict(src, dest_file, resolve)
+
     if isinstance(action, Path):
         save_as = action
         logging.info(f"[RENAME] Renaming copy target: {src} -> {action}")
@@ -660,15 +663,30 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
             else:
                 with thread_lock:
                     state.total_memory_operated += action.stat().st_size
+                if mode == "move":
+                    if src.exists() and src.is_file():
+                        src.unlink()
+                        logging.info(f"[PROGRESS: {progress()}%] File moved and hash verified using {algo} successfully.")
+                    else:
+                        logging.info(f"[PHANTOM] File vanished before completing the operation: {src}")
+                else:
                     logging.info(f"[PROGRESS: {progress()}%] File copied and hash verified using {algo} successfully.")
+                with thread_lock:
                     state.dupe_candidates.setdefault(action.stat().st_size, []).append(get_or_update_file_hash(action, algo, chunk_size))
         else:
             with thread_lock:
                 state.total_memory_operated += action.stat().st_size
-            logging.info(f"[PROGRESS: {progress()}%] File copied using {algo} successfully.")
+            if mode == "move":
+                if src.exists() and src.is_file():
+                    src.unlink()
+                    logging.info(f"[PROGRESS: {progress()}%] File moved successfully.")
+                else:
+                    logging.info(f"[PHANTOM] File vanished before completing the operation: {src}")
+            else:
+                logging.info(f"[PROGRESS: {progress()}%] File copied successfully.")
         return True
 
-    if action:
+    if action and isinstance(action, bool):
         logging.info(f"[COPY] Copying {src} -> {dest_file}")
         if (dest_file.is_file()):
             logging.info(f"[DEPRECATE] {dest_file} is deprecated. Transferring it to: {save_as}")
@@ -686,16 +704,40 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
             else:
                 with thread_lock:
                     state.total_memory_operated += src.stat().st_size
-                logging.info(f"[PROGRESS: {progress()}%] File copied and hash verified using {algo} successfully.")
+                if mode == "move":
+                    if src.exists() and src.is_file():
+                        src.unlink()
+                        logging.info(f"[PROGRESS: {progress()}%] File moved and hash verified using {algo} successfully.")
+                    else:
+                        logging.info(f"[PHANTOM] File vanished before completing the operation: {src}")
+                else:
+                    logging.info(f"[PROGRESS: {progress()}%] File copied and hash verified using {algo} successfully.")
+                with thread_lock:
+                    state.dupe_candidates.setdefault(save_as.stat().st_size, []).append(get_or_update_file_hash(save_as, algo, chunk_size))
+
         else:
             with thread_lock:
                 state.total_memory_operated += src.stat().st_size
-            logging.info(f"[PROGRESS: {progress()}%] File copied using {algo} successfully.")
+            if mode == "move":
+                if src.exists() and src.is_file():
+                    src.unlink()
+                    logging.info(f"[PROGRESS: {progress()}%] File moved successfully.")
+                else:
+                    logging.info(f"[PHANTOM] File vanished before completing the operation: {src}")
+            else:
+                logging.info(f"[PROGRESS: {progress()}%] File copied successfully.")
         return True
     else:
         with thread_lock:
             state.total_memory_operation -= src.stat().st_size
-        logging.info(f"[SKIP] Skipping {src}, conflict resolution = {resolve}")
+        if mode == "move":
+            # Move original file to backup
+            create_dirs(src / "fylex.deprecated" / str(state.current_process), e_ok=True, dry_run=dry_run)
+            target_path = src / "fylex.deprecated" / str(state.current_process) / src.name
+            fast_move(src, target_path, algo, dry_run)
+            logging.info(f"[SKIP] Deprecating {src}, conflict resolution = {resolve}")
+        else:
+            logging.info(f"[SKIP] Skipping {src}, conflict resolution = {resolve}")
         return False
 
 
@@ -814,12 +856,6 @@ def fileops(func_name: str, src: Path | str, dest: Path | str, resolve: str = "r
             resolve, verbose, preserve_meta, verify, chunk_size, trials=0, recurse=recurse
         )
 
-        if func_name == "filemove":
-            # Move original file to backup
-            create_dirs(backup, e_ok=True, dry_run=dry_run)
-            target_path = backup / file.name
-            fast_move(file, target_path, algo, dry_run)
-
     # Cleanup empty folders
     with thread_lock:
         logging.info(f"[NOTE] Note down the process ID for future reference: {state.current_process}")
@@ -853,7 +889,7 @@ def filemove(src: Path | str, dest: Path | str, resolve: str = "rename", algo: s
                    exclude_regex, exclude_names, exclude_glob, recursive_check, recurse,
                    verify, has_extension, no_create, preserve_meta, backup)
 
-def undo(p_id: str, verbose: bool = True, force: bool = False) -> bool:
+def undo(p_id: str, verbose: bool = True, force: bool = False, summary: Path | str = None) -> bool:
     global state
     safe_logging(verbose)
     func_name = "undo"
@@ -945,11 +981,11 @@ def undo(p_id: str, verbose: bool = True, force: bool = False) -> bool:
     else:
         logging.info(f"[UNDO] Process {p_id} undone successfully")
 
-    state = FylexState()
+    log_copier(func_name, summary)
     return True
 
 
-def redo(p_id: str, verbose: bool = True, force: bool = False) -> bool:
+def redo(p_id: str, verbose: bool = True, force: bool = False, summary: Path | str = None) -> bool:
     global state
     safe_logging(verbose)
     func_name = "redo"
@@ -1031,5 +1067,5 @@ def redo(p_id: str, verbose: bool = True, force: bool = False) -> bool:
     else:
         logging.info(f"[REDO] Process {p_id} replayed successfully")
 
-    state = FylexState()
+    log_copier(func_name, summary)
     return True
