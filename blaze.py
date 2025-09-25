@@ -719,7 +719,7 @@ class FylexGUI:
         """Show about dialog."""
         about_text = """Blazefox - Advanced File Manager
 
-Version: 2.0
+Version: 2.1
 A powerful file management tool with advanced features:
 
 • Fast file copying and moving with verification
@@ -734,7 +734,7 @@ Built with Python and Tkinter
 Enhanced GUI with modern styling and improved usability
 Report bugs at: sivaprasad.off@gmail.com
 
-© 2024 Sivaprasad Murali"""
+© 2025 Sivaprasad Murali"""
         
         messagebox.showinfo("About Blazefox", about_text)
 

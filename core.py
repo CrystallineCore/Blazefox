@@ -226,7 +226,7 @@ def copier(src: Path | str, dest: Path | str, buffer_size: int,
                 logging.warning("Skipping ACL preservation (requires `acl` package).")
 
         safe_replace(tmp_dest, actual_dest)
-    process_json_writer(src, actual_dest, "copy", algo, dry_run)
+    process_json_writer(src, actual_dest, mode, algo, dry_run)
 
 # -------- Updater --------
 def func_route_updater(func_name: str):
@@ -616,10 +616,8 @@ def process_json_writer(src: Path | str, dest: Path | str, ops: str, algo: str, 
                 'src': str(src.resolve()),
                 'dest': str(dest_path.resolve()) if dest_path else None,
                 'operation': ops,
-                'algo': algo,
                 'hash': file_hash,
                 'timestamp': datetime.datetime.now().isoformat(),
-                'dry_run': bool(dry_run),
             })
 
         json_writer()
@@ -653,7 +651,8 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
         copier(src, action, get_optimal_buffer_size(src), algo, preserve_meta, mode, dry_run)
         if (verify):
             if (get_or_update_file_hash(src, algo) != get_or_update_file_hash(action, algo)):
-                try_remove(action)
+                if not dry_run:
+                    try_remove(action)
                 logging.warning(f"[RETRY] Hash mismatch: Retrying- {trials}")
                 if (trials < FylexConfig.MAX_RETRIES):
                     copy_with_conflict_resolution(mode, src, dest, backup, dry_run, algo, resolve, verbose, preserve_meta, verify, chunk_size, trials+1, recurse)
@@ -665,7 +664,8 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
                     state.total_memory_operated += action.stat().st_size
                 if mode == "move":
                     if src.exists() and src.is_file():
-                        src.unlink()
+                        if not dry_run:
+                            src.unlink()
                         logging.info(f"[PROGRESS: {progress()}%] File moved and hash verified using {algo} successfully.")
                     else:
                         logging.info(f"[PHANTOM] File vanished before completing the operation: {src}")
@@ -678,7 +678,8 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
                 state.total_memory_operated += action.stat().st_size
             if mode == "move":
                 if src.exists() and src.is_file():
-                    src.unlink()
+                    if not dry_run:
+                        src.unlink()
                     logging.info(f"[PROGRESS: {progress()}%] File moved successfully.")
                 else:
                     logging.info(f"[PHANTOM] File vanished before completing the operation: {src}")
@@ -686,7 +687,7 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
                 logging.info(f"[PROGRESS: {progress()}%] File copied successfully.")
         return True
 
-    if action and isinstance(action, bool):
+    elif action and isinstance(action, bool):
         logging.info(f"[COPY] Copying {src} -> {dest_file}")
         if (dest_file.is_file()):
             logging.info(f"[DEPRECATE] {dest_file} is deprecated. Transferring it to: {save_as}")
@@ -694,7 +695,8 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
         copier(src, dest_file, get_optimal_buffer_size(src), algo, preserve_meta, mode, dry_run)
         if (verify):
             if (get_or_update_file_hash(src, algo) != get_or_update_file_hash(dest_file, algo)):
-                try_remove(dest_file)
+                if not dry_run:
+                    try_remove(dest_file)
                 logging.warning(f"[WARNING] Hash mismatch: Retrying- {trials}")
                 if (trials < FylexConfig.MAX_RETRIES):
                     copy_with_conflict_resolution(mode, src, dest, backup, dry_run, algo, resolve, verbose, preserve_meta, verify, chunk_size, trials+1, recurse)
@@ -706,7 +708,8 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
                     state.total_memory_operated += src.stat().st_size
                 if mode == "move":
                     if src.exists() and src.is_file():
-                        src.unlink()
+                        if not dry_run:
+                            src.unlink()
                         logging.info(f"[PROGRESS: {progress()}%] File moved and hash verified using {algo} successfully.")
                     else:
                         logging.info(f"[PHANTOM] File vanished before completing the operation: {src}")
@@ -720,7 +723,8 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
                 state.total_memory_operated += src.stat().st_size
             if mode == "move":
                 if src.exists() and src.is_file():
-                    src.unlink()
+                    if not dry_run:
+                        src.unlink()
                     logging.info(f"[PROGRESS: {progress()}%] File moved successfully.")
                 else:
                     logging.info(f"[PHANTOM] File vanished before completing the operation: {src}")
@@ -768,7 +772,7 @@ def fileops(func_name: str, src: Path | str, dest: Path | str, resolve: str = "r
             chunk_size: int = FylexConfig.DEFAULT_CHUNK_SIZE, verbose: bool = True, dry_run: bool = False, summary: Path | str = None, 
             match_regex: str = None, match_names: str = None, match_glob: str = None, exclude_regex: str = None, exclude_names: str = None, 
             exclude_glob: str = None, recursive_check: bool = False, recurse: bool = False, verify: bool = False, has_extension: bool = False, 
-            no_create: bool = False, preserve_meta: bool = True, backup: Path | str = "fylex.deprecated") -> bool:
+            no_create: bool = False, preserve_meta: bool = True, backup: Path | str = "fylex.deprecated") -> int:
     global state
     src = Path(src).resolve()
     dest = Path(dest).resolve()
@@ -858,7 +862,9 @@ def fileops(func_name: str, src: Path | str, dest: Path | str, resolve: str = "r
 
     # Cleanup empty folders
     with thread_lock:
-        logging.info(f"[NOTE] Note down the process ID for future reference: {state.current_process}")
+        process_id = state.current_process
+    
+    logging.info(f"[NOTE] Note down the process ID for future reference: {process_id}")
 
     if backup.exists() and not any(backup.iterdir()):
         backup.rmdir()
@@ -867,7 +873,7 @@ def fileops(func_name: str, src: Path | str, dest: Path | str, resolve: str = "r
         temp.rmdir()
 
     log_copier(func_name, summary)
-    return True
+    return process_id
 
 
 def filecopy(src: Path | str, dest: Path | str, resolve: str = "rename", algo: str = FylexConfig.DEFAULT_HASH_ALGO, chunk_size: int = FylexConfig.DEFAULT_CHUNK_SIZE, 
@@ -889,7 +895,7 @@ def filemove(src: Path | str, dest: Path | str, resolve: str = "rename", algo: s
                    exclude_regex, exclude_names, exclude_glob, recursive_check, recurse,
                    verify, has_extension, no_create, preserve_meta, backup)
 
-def undo(p_id: str, verbose: bool = True, force: bool = False, summary: Path | str = None) -> bool:
+def undo(p_id: int, verbose: bool = True, force: bool = False, summary: Path | str = None, dry_run: bool = False) -> int:
     global state
     safe_logging(verbose)
     func_name = "undo"
@@ -898,43 +904,40 @@ def undo(p_id: str, verbose: bool = True, force: bool = False, summary: Path | s
     json_path = Path(f"json/{p_id}.json")
     if not json_path.exists():
         logging.error(f"[UNDO] No record found for process ID {p_id}")
-        return False
+        return -1
 
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     params = data.get("parameters", {})
     algo = params.get("algo", FylexConfig.DEFAULT_HASH_ALGO)
-    dry_run = params.get("dry_run", False)
-    preserve_meta = params.get("preserve_meta", True)
+    p_id_dry_run = params.get("dry_run", False)
+    
+    if p_id_dry_run:
+        logging.warning("[UNDO] Skipping dry-run entry (cannot rollback a dry-run).")
+        return -1
 
     with thread_lock:
         if state.func_route[0] == func_name:
-            while Path(f"json/{state.current_process}.json").is_file():
+            while Path(f"json/{state.current_process}.json").is_file() or Path(f"json/{state.current_process}.jsonl").is_file():
                 state.current_process += 1
             state.process_json[state.current_process] = []
             state.parameters = {
                 "func_name": func_name,
                 "p_id": p_id,
-                "algo": algo,
                 "verbose": verbose,
                 "force": force,
                 "dry_run": dry_run,
-                "preserve_meta": preserve_meta,
+                "summary": summary,
             }
 
     proc_map = data.get("process_json", {})
     try:
-        integer_check = int(p_id)
-        del integer_check
         entries = proc_map.get(str(p_id)) or []
     except ValueError:
         return ValueError("Expected integer for p_id, but received non-integral values")
 
     for entry in reversed(entries):
-        if entry.get("dry_run", False):
-            logging.warning("[UNDO] Skipping dry-run entry (cannot rollback a dry-run).")
-            continue
 
         src = Path(entry['src'])
         dest = Path(entry['dest']) if entry['dest'] else None
@@ -946,6 +949,7 @@ def undo(p_id: str, verbose: bool = True, force: bool = False, summary: Path | s
                     if not dry_run:
                         dest.unlink()
                     logging.info(f"[UNDO] Removed {dest}")
+                    process_json_writer(src, dest, "delete", algo, dry_run)
                 else:
                     logging.warning(f"[UNDO] File at {dest} not found")
             elif op == "move":
@@ -954,6 +958,7 @@ def undo(p_id: str, verbose: bool = True, force: bool = False, summary: Path | s
                     if not dry_run:
                         fast_move(dest, src, algo, False)
                     logging.info(f"[UNDO] File {dest} has been restored")
+                    #process_json_writer(dest, src, "move", algo, dry_run) Already covered by fast_move
                 else:
                     logging.warning(f"[UNDO] File at {dest} not found")
             elif op == "delete":
@@ -967,6 +972,7 @@ def undo(p_id: str, verbose: bool = True, force: bool = False, summary: Path | s
                         if not dry_run:
                             src.rmdir()
                         logging.info(f"[UNDO] Removed created directory {src}")
+                        process_json_writer(src, None, "delete", algo, dry_run)
                     else:
                         logging.warning(f"[UNDO] Cannot remove {src} as it has been modified or contains other files")
             else:
@@ -980,12 +986,13 @@ def undo(p_id: str, verbose: bool = True, force: bool = False, summary: Path | s
         logging.info(f"[UNDO] No entries to process in JSON for {p_id}.")
     else:
         logging.info(f"[UNDO] Process {p_id} undone successfully")
-
+    with thread_lock:
+        process_id = state.current_process
     log_copier(func_name, summary)
-    return True
+    return process_id
 
 
-def redo(p_id: str, verbose: bool = True, force: bool = False, summary: Path | str = None) -> bool:
+def redo(p_id: int, verbose: bool = True, force: bool = False, summary: Path | str = None, dry_run: bool = False) -> int:
     global state
     safe_logging(verbose)
     func_name = "redo"
@@ -1001,28 +1008,29 @@ def redo(p_id: str, verbose: bool = True, force: bool = False, summary: Path | s
 
     params = data.get("parameters", {})
     algo = params.get("algo", FylexConfig.DEFAULT_HASH_ALGO)
-    dry_run = params.get("dry_run", False)
+    p_id_dry_run = params.get("dry_run", False)
     preserve_meta = params.get("preserve_meta", True)
+
+    if p_id_dry_run:
+        logging.warning("[UNDO] Skipping dry-run entry (cannot rollback a dry-run).")
+        return -1
 
     with thread_lock:
         if state.func_route[0] == func_name:
-            while Path(f"json/{state.current_process}.json").is_file():
+            while Path(f"json/{state.current_process}.json").is_file() or Path(f"json/{state.current_process}.jsonl").is_file():
                 state.current_process += 1
             state.process_json[state.current_process] = []
             state.parameters = {
                 "func_name": func_name,
                 "p_id": p_id,
-                "algo": algo,
                 "verbose": verbose,
                 "force": force,
                 "dry_run": dry_run,
-                "preserve_meta": preserve_meta,
+                "summary": summary,
             }
 
     proc_map = data.get("process_json", {})
     try:
-        integer_check = int(p_id)
-        del integer_check
         entries = proc_map.get(str(p_id)) or []
     except ValueError:
         return ValueError("Expected integer for p_id, but received non-integral values")
@@ -1052,20 +1060,21 @@ def redo(p_id: str, verbose: bool = True, force: bool = False, summary: Path | s
                 else:
                     logging.warning(f"[REDO] File at {dest} not found")
             elif op == "create":
-                if not dry_run:
-                    create_dirs(src, True, dry_run)
+                create_dirs(src, True, dry_run)
                 logging.info(f"[REDO] Re-created directory {src}")
             else:
                 logging.error(f"[REDO] Unknown operation performed on file: {dest}")
         except Exception as e:
             logging.error(f"[REDO] Failed to redo {op} for {src}: {e}")
             if not force:
-                return False
+                return -1
 
     if not entries:
         logging.info(f"[ERROR] Could not process JSON: {p_id} or it is empty.")
     else:
         logging.info(f"[REDO] Process {p_id} replayed successfully")
 
+    with thread_lock:
+        process_id = state.current_process
     log_copier(func_name, summary)
-    return True
+    return process_id
