@@ -49,7 +49,7 @@ def progress():
         return int(100*state.total_memory_operated/state.total_memory_operation) if state.total_memory_operation else 100
 
 def json_writer():
-    json_dir = Path("json")
+    json_dir = Path(FylexConfig.FYLEX_HOME / "json")
     json_dir.mkdir(exist_ok=True)
     with thread_lock:
         file_path = json_dir / f"{state.current_process}.jsonl"
@@ -73,8 +73,8 @@ def json_writer():
 def finalize_json():
     with thread_lock:
         process_id = state.current_process
-    jsonl_path = Path("json") / f"{process_id}.jsonl"
-    json_path = Path("json") / f"{process_id}.json"
+    jsonl_path = Path(FylexConfig.FYLEX_HOME / "json") / f"{process_id}.jsonl"
+    json_path = Path(FylexConfig.FYLEX_HOME / "json") / f"{process_id}.json"
 
     if not jsonl_path.exists():
         raise FileNotFoundError(f"{jsonl_path} not found")
@@ -233,7 +233,7 @@ def func_route_updater(func_name: str):
     with thread_lock:
         if not state.func_route:
             # fresh log file only on first use
-            with open('fylex.log', 'w') as f:
+            with open(FylexConfig.FYLEX_HOME / 'fylex.log', 'w') as f:
                 pass
         # overwrite instead of append, so [0] is always the current func
         state.func_route = [func_name]
@@ -255,14 +255,14 @@ def safe_logging(verbose=True):
     root.setLevel(logging.INFO)
 
     # Add a FileHandler to write to fylex.log if not already present
-    fpath_abs = os.path.abspath("fylex.log")
+    fpath_abs = os.path.abspath(FylexConfig.FYLEX_HOME / "fylex.log")
     has_fh = False
     for h in root.handlers:
         if isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == fpath_abs:
             has_fh = True
             break
     if not has_fh:
-        fh = logging.FileHandler("fylex.log", mode="a", encoding="utf-8")
+        fh = logging.FileHandler(FylexConfig.FYLEX_HOME / "fylex.log", mode="a", encoding="utf-8")
         fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
         root.addHandler(fh)
     
@@ -290,7 +290,7 @@ def log_copier(func_name, summary):
             except Exception:
                 pass
             try:
-                shutil.copy("fylex.log", summary)
+                shutil.copy(FylexConfig.FYLEX_HOME / "fylex.log", summary)
             except Exception:
                 logging.exception("Failed to copy fylex.log to summary")
         json_writer()
@@ -685,6 +685,8 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
                     logging.info(f"[PHANTOM] File vanished before completing the operation: {src}")
             else:
                 logging.info(f"[PROGRESS: {progress()}%] File copied successfully.")
+            with thread_lock:
+                state.dupe_candidates.setdefault(src.stat().st_size, []).append(get_or_update_file_hash(src, algo, chunk_size))
         return True
 
     elif action and isinstance(action, bool):
@@ -730,6 +732,8 @@ def copy_with_conflict_resolution(mode: str, src: Path | str, dest: Path | str, 
                     logging.info(f"[PHANTOM] File vanished before completing the operation: {src}")
             else:
                 logging.info(f"[PROGRESS: {progress()}%] File copied successfully.")
+            with thread_lock:
+                state.dupe_candidates.setdefault(src.stat().st_size, []).append(get_or_update_file_hash(src, algo, chunk_size))
         return True
     else:
         with thread_lock:
@@ -794,7 +798,7 @@ def fileops(func_name: str, src: Path | str, dest: Path | str, resolve: str = "r
 
     with thread_lock:
         # Assign a new process ID
-        while Path(f"json/{state.current_process}.json").is_file() or Path(f"json/{state.current_process}.jsonl").is_file():
+        while Path(FylexConfig.FYLEX_HOME / f"json/{state.current_process}.json").is_file() or Path(FylexConfig.FYLEX_HOME / f"json/{state.current_process}.jsonl").is_file():
             state.current_process += 1
 
         # Assign backup path after process ID is finalized
@@ -901,7 +905,7 @@ def undo(p_id: int, verbose: bool = True, force: bool = False, summary: Path | s
     func_name = "undo"
     func_route_updater(func_name)
 
-    json_path = Path(f"json/{p_id}.json")
+    json_path = Path(FylexConfig.FYLEX_HOME / f"json/{p_id}.json")
     if not json_path.exists():
         logging.error(f"[UNDO] No record found for process ID {p_id}")
         return -1
@@ -919,7 +923,7 @@ def undo(p_id: int, verbose: bool = True, force: bool = False, summary: Path | s
 
     with thread_lock:
         if state.func_route[0] == func_name:
-            while Path(f"json/{state.current_process}.json").is_file() or Path(f"json/{state.current_process}.jsonl").is_file():
+            while Path(FylexConfig.FYLEX_HOME / f"json/{state.current_process}.json").is_file() or Path(FylexConfig.FYLEX_HOME / f"json/{state.current_process}.jsonl").is_file():
                 state.current_process += 1
             state.process_json[state.current_process] = []
             state.parameters = {
@@ -988,6 +992,8 @@ def undo(p_id: int, verbose: bool = True, force: bool = False, summary: Path | s
         logging.info(f"[UNDO] Process {p_id} undone successfully")
     with thread_lock:
         process_id = state.current_process
+    logging.info(f"[NOTE] Note down the process ID for future reference: {process_id}")
+
     log_copier(func_name, summary)
     return process_id
 
@@ -998,7 +1004,7 @@ def redo(p_id: int, verbose: bool = True, force: bool = False, summary: Path | s
     func_name = "redo"
     func_route_updater(func_name)
 
-    json_path = Path(f"json/{p_id}.json")
+    json_path = Path(FylexConfig.FYLEX_HOME / f"json/{p_id}.json")
     if not json_path.exists():
         logging.error(f"[REDO] No record found for process ID {p_id}")
         return False
@@ -1017,7 +1023,7 @@ def redo(p_id: int, verbose: bool = True, force: bool = False, summary: Path | s
 
     with thread_lock:
         if state.func_route[0] == func_name:
-            while Path(f"json/{state.current_process}.json").is_file() or Path(f"json/{state.current_process}.jsonl").is_file():
+            while Path(FylexConfig.FYLEX_HOME / f"json/{state.current_process}.json").is_file() or Path(FylexConfig.FYLEX_HOME / f"json/{state.current_process}.jsonl").is_file():
                 state.current_process += 1
             state.process_json[state.current_process] = []
             state.parameters = {
@@ -1076,5 +1082,7 @@ def redo(p_id: int, verbose: bool = True, force: bool = False, summary: Path | s
 
     with thread_lock:
         process_id = state.current_process
+    logging.info(f"[NOTE] Note down the process ID for future reference: {process_id}")
+    
     log_copier(func_name, summary)
     return process_id

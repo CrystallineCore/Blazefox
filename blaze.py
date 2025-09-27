@@ -116,7 +116,7 @@ class FylexGUI:
                 base_path = os.path.abspath(".")
             return os.path.join(base_path, relative_path)
 
-        self.root.title("Blazefox - Advanced File Manager")
+        self.root.title("Blazefox 2.3 - Advanced File Manager")
         self.root.state('zoomed') if os.name == 'nt' else self.root.attributes('-zoomed', True)
         
         # Set minimum size
@@ -352,6 +352,7 @@ class FylexGUI:
         options_frame.pack(fill='x', pady=(0, 10))
         
         ttk.Checkbutton(options_frame, text="Force Operation", variable=self.force_var).pack(anchor='w')
+        ttk.Checkbutton(options_frame, text="Dry Run", variable=self.dry_run_var).pack(anchor='w')
 
     def add_path_row(self, parent, row, label, var, folder=False, file=False):
         """Add a path input row with browse button."""
@@ -592,10 +593,10 @@ class FylexGUI:
                 )
                 
             elif action == "undo":
-                fylex.undo(self.pid_var.get(), force=self.force_var.get(), verbose=True)
+                fylex.undo(self.pid_var.get(), force=self.force_var.get(), verbose=True, summary=self.summary_var.get(), dry_run=self.dry_run_var.get())
                 
             elif action == "redo":
-                fylex.redo(self.pid_var.get(), force=self.force_var.get(), verbose=True)
+                fylex.redo(self.pid_var.get(), force=self.force_var.get(), verbose=True, summary=self.summary_var.get(), dry_run=self.dry_run_var.get())
                 
             # Success message
             self.root.after(0, lambda: self.operation_completed(True))
@@ -719,7 +720,7 @@ class FylexGUI:
         """Show about dialog."""
         about_text = """Blazefox - Advanced File Manager
 
-Version: 2.1
+Version: 2.2
 A powerful file management tool with advanced features:
 
 • Fast file copying and moving with verification
